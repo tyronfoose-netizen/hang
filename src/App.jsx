@@ -163,37 +163,62 @@ function dayDetailToProto(day) {
 
 // ─── BUILD PROMPT ─────────────────────────────────────────────────────────────
 function sanitize(s){return String(s||"").replace(/[-]/g," ").trim();}
+function getStartDate(formData){
+  if(formData.startDate)return formData.startDate;
+  // Find next occurrence of first training day
+  const today=new Date();
+  const targetDay=formData.trainingDays[0]??0; // 0=Mon,6=Sun
+  // Convert our Mon-based index to JS Sun-based (0=Sun)
+  const jsTarget=(targetDay+1)%7;
+  const todayJs=today.getDay();
+  let daysUntil=(jsTarget-todayJs+7)%7;
+  if(daysUntil===0)daysUntil=7; // Start next week if today is the day
+  const start=new Date(today);
+  start.setDate(today.getDate()+daysUntil);
+  return start.toISOString().split("T")[0];
+}
 function buildPrompt(formData){
-  const weeksOut=Math.max(2,Math.round((new Date(formData.peakDate)-new Date())/(7*24*3600*1000)));
+  const startDate=getStartDate(formData);
+  const startDateObj=new Date(startDate+"T00:00:00");
+  const peakDateObj=new Date(formData.peakDate+"T00:00:00");
+  const weeksOut=Math.max(2,Math.round((peakDateObj-startDateObj)/(7*24*3600*1000)));
   const trainingDays=formData.trainingDays.map(i=>DAY_FULL[i]).join(", ");
-  const numPhases=weeksOut<=4?1:weeksOut<=8?2:weeksOut<=14?3:4;
   const goal=sanitize(formData.goalDescription);
   const current=sanitize(formData.currentGrade);
   const target=sanitize(formData.targetGrade);
   const injury=sanitize(formData.injuryNotes)||"None";
   const equipment=sanitize(formData.hangboardAccess);
+  const isLong=weeksOut>16;
+  const numPhases=weeksOut<=4?1:weeksOut<=8?2:weeksOut<=14?3:weeksOut<=24?4:5;
+  const weekInstructions=isLong
+    ?`For each phase include only 2 representative weeks: the first week and one peak week. Note the pattern repeats for the full phase duration.`
+    :`For each phase include every week in detail.`;
+  const startLabel=new Date(startDate+"T00:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"});
   return `You are an expert climbing coach. Generate a periodized finger strength training program as JSON only.
 
 ATHLETE:
 - Goal: ${formData.goalType} - ${goal}
 - Current level: ${current} to Target: ${target}
-- Peak date: ${formData.peakDate} (${weeksOut} weeks away)
+- Program start: ${startLabel} (${startDate})
+- Peak date: ${formData.peakDate} (${weeksOut} weeks of training)
 - Training days: ${trainingDays} (${formData.trainingDays.length} days/week)
 - Session length: ${formData.hoursPerSession} hours
 - Equipment: ${equipment}
 - Injury notes: ${injury}
 
 Return ONLY this JSON structure, no markdown, no explanation:
-{"programName":"string","totalWeeks":${weeksOut},"summary":"2 sentence overview","keyPrinciples":["p1","p2","p3"],"phases":[{"phaseNumber":1,"phaseName":"Base","startWeek":1,"endWeek":4,"durationWeeks":4,"intensity":55,"description":"Phase focus","weeks":[{"weekNumber":1,"weekTitle":"title","intensity":50,"focus":"focus","days":[{"dayIndex":0,"dayName":"Monday","type":"training","workoutTitle":"Max Hangs","detail":"5x10s on 20mm, 3min rest, 85% intensity","tags":["max"]},{"dayIndex":2,"dayName":"Wednesday","type":"rest","workoutTitle":"Rest","detail":"Active recovery","tags":["rest"]}]}]}]}
+{"programName":"string","totalWeeks":${weeksOut},"startDate":"${startDate}","summary":"2 sentence overview","keyPrinciples":["p1","p2","p3"],"phases":[{"phaseNumber":1,"phaseName":"Base","startWeek":1,"endWeek":8,"durationWeeks":8,"intensity":55,"description":"Phase focus","weeks":[{"weekNumber":1,"weekTitle":"title","intensity":50,"focus":"focus","days":[{"dayIndex":0,"dayName":"Monday","type":"training","workoutTitle":"Max Hangs","detail":"5x10s on 20mm, 3min rest, 85% intensity","tags":["max"]},{"dayIndex":2,"dayName":"Wednesday","type":"rest","workoutTitle":"Rest","detail":"Active recovery","tags":["rest"]}]}]}]}
 
 RULES:
-- Create exactly ${numPhases} phase(s) covering ${weeksOut} weeks total
-- Only schedule training on: ${trainingDays}. All other days = rest/active_recovery
-- day type: training, rest, active_recovery, or redpoint
+- Create exactly ${numPhases} phases covering all ${weeksOut} weeks. Phases must add up to exactly ${weeksOut} weeks total
+- Program starts on ${startDate}. Week 1 begins on this date
+- ${weekInstructions}
+- Only schedule training on: ${trainingDays}. All other days must be rest or active_recovery
+- day type must be one of: training, rest, active_recovery, redpoint
 - tags from: max, rep, vol, rest, peak, skill
 - day detail: concise, under 20 words, include sets x seconds and rest time
-- Include ONLY training days + 1-2 key rest days per week
-- Return valid JSON only`;
+- The final phase must end on week ${weeksOut} which ends around ${formData.peakDate}
+- Return valid JSON only, no markdown fences`;
 }
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
@@ -658,7 +683,7 @@ function GoalBuilder({onBack,onSave}){
   const[error,setError]=useState("");
   const minDate=new Date();minDate.setDate(minDate.getDate()+14);
   const minDateStr=minDate.toISOString().split("T")[0];
-  const weeksUntilPeak=formData.peakDate?Math.round((new Date(formData.peakDate)-new Date())/(7*24*3600*1000)):null;
+  const weeksUntilPeak=formData.peakDate?Math.round((new Date(formData.peakDate+"T00:00:00")-new Date(getStartDate(formData)+"T00:00:00"))/(7*24*3600*1000)):null;
   const toggleDay=i=>setFormData(f=>({...f,trainingDays:f.trainingDays.includes(i)?f.trainingDays.filter(d=>d!==i):[...f.trainingDays,i].sort()}));
   const validate=()=>{
     if(!formData.goalDescription.trim())return"Please describe your goal";
@@ -674,7 +699,7 @@ function GoalBuilder({onBack,onSave}){
     const dots=["Building your program","Building your program.","Building your program..","Building your program..."];
     let di=0;const dInt=setInterval(()=>setStreamText(dots[di++%dots.length]),600);
     try{
-      const requestBody=JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:3500,messages:[{role:"user",content:buildPrompt(formData)}]});
+      const requestBody=JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:8000,messages:[{role:"user",content:buildPrompt(formData)}]});
       const response=await fetch("/api/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:requestBody});
       clearInterval(dInt);
       if(!response.ok){let m=`API error ${response.status}`;try{const b=await response.json();m+=": "+(b?.error?.message||"").slice(0,200);}catch{}throw new Error(m);}
@@ -725,6 +750,15 @@ function GoalBuilder({onBack,onSave}){
                   <option value="0.5">30 min</option><option value="1">1 hr</option><option value="1.5">1.5 hr</option><option value="2">2 hr</option><option value="2.5">2.5+ hr</option>
                 </select>
               </div>
+            </div>
+            <div className="form-section">
+              <span className="form-label">Start Date <span style={{color:"var(--muted)",fontWeight:300,letterSpacing:1}}>(optional)</span></span>
+              <input type="date" className="goal-input" min={new Date().toISOString().split("T")[0]} max={formData.peakDate||undefined} value={formData.startDate} onChange={e=>setFormData(f=>({...f,startDate:e.target.value}))}/>
+              <span style={{fontFamily:"DM Mono,monospace",fontSize:10,color:"var(--muted)",display:"block",marginTop:4}}>
+                {formData.startDate
+                  ? `Starting ${new Date(formData.startDate+"T00:00:00").toLocaleDateString("en-US",{weekday:"long",month:"short",day:"numeric"})}`
+                  : `Leave blank to start on your next ${DAY_FULL[formData.trainingDays[0]]||"training day"}`}
+              </span>
             </div>
             <div className="form-section"><span className="form-label">Training Days</span><div className="days-grid">{DAYS_OF_WEEK.map((d,i)=><button key={i} className={`day-btn ${formData.trainingDays.includes(i)?"active":""}`} onClick={()=>toggleDay(i)}>{d}</button>)}</div></div>
             <div className="goal-input-grid form-section" style={{marginBottom:16}}>
