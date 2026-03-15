@@ -188,11 +188,7 @@ function buildPrompt(formData){
   const target=sanitize(formData.targetGrade);
   const injury=sanitize(formData.injuryNotes)||"None";
   const equipment=sanitize(formData.hangboardAccess);
-  const isLong=weeksOut>16;
   const numPhases=weeksOut<=4?1:weeksOut<=8?2:weeksOut<=14?3:weeksOut<=24?4:5;
-  const weekInstructions=isLong
-    ?`For each phase include only 2 representative weeks: the first week and one peak week. Note the pattern repeats for the full phase duration.`
-    :`For each phase include every week in detail.`;
   const startLabel=new Date(startDate+"T00:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"});
   return `You are an expert climbing coach. Generate a periodized finger strength training program as JSON only.
 
@@ -210,9 +206,11 @@ Return ONLY this JSON structure, no markdown, no explanation:
 {"programName":"string","totalWeeks":${weeksOut},"startDate":"${startDate}","summary":"2 sentence overview","keyPrinciples":["p1","p2","p3"],"phases":[{"phaseNumber":1,"phaseName":"Base","startWeek":1,"endWeek":8,"durationWeeks":8,"intensity":55,"description":"Phase focus","weeks":[{"weekNumber":1,"weekTitle":"title","intensity":50,"focus":"focus","days":[{"dayIndex":0,"dayName":"Monday","type":"training","workoutTitle":"Max Hangs","detail":"5x10s on 20mm, 3min rest, 85% intensity","tags":["max"]},{"dayIndex":2,"dayName":"Wednesday","type":"rest","workoutTitle":"Rest","detail":"Active recovery","tags":["rest"]}]}]}]}
 
 RULES:
-- Create exactly ${numPhases} phases covering all ${weeksOut} weeks. Phases must add up to exactly ${weeksOut} weeks total
+- Create exactly ${numPhases} phases covering all ${weeksOut} weeks
+- Phases must add up to exactly ${weeksOut} weeks total with NO gaps and NO skipped weeks
+- Include EVERY week number from 1 to ${weeksOut} — do not skip any weeks
+- For longer phases, weeks may repeat the same structure but must all be listed explicitly
 - Program starts on ${startDate}. Week 1 begins on this date
-- ${weekInstructions}
 - Only schedule training on: ${trainingDays}. All other days must be rest or active_recovery
 - day type must be one of: training, rest, active_recovery, redpoint
 - tags from: max, rep, vol, rest, peak, skill
@@ -483,32 +481,72 @@ function IntensityBar({value}){
 }
 
 // ─── WEEK ROW (clickable training days) ──────────────────────────────────────
-function WeekRow({week, onLaunchDay}){
+function getWeekStartDate(programStartDate, weekNumber){
+  if(!programStartDate)return null;
+  const start=new Date(programStartDate+"T00:00:00");
+  start.setDate(start.getDate()+(weekNumber-1)*7);
+  return start;
+}
+
+function formatWeekRange(programStartDate, weekNumber){
+  const start=getWeekStartDate(programStartDate,weekNumber);
+  if(!start)return null;
+  const end=new Date(start);
+  end.setDate(start.getDate()+6);
+  const opts={month:"short",day:"numeric"};
+  return `${start.toLocaleDateString("en-US",opts)} - ${end.toLocaleDateString("en-US",opts)}`;
+}
+
+function WeekRow({week, onLaunchDay, programStartDate}){
   const[open,setOpen]=useState(false);
   const activeDays=week.days?.filter(d=>d.type!=="rest"&&d.type!=="active_recovery")||[];
   const tagColor={max:"#e74c3c",rep:"#6ab04c",vol:"#74b9ff",peak:"#d4a843",skill:"#a8c4c0",rest:"#6b6b6b"};
   const tagBg={max:"rgba(192,57,43,0.2)",rep:"rgba(74,103,65,0.25)",vol:"rgba(52,152,219,0.2)",peak:"rgba(212,168,67,0.2)",skill:"rgba(168,196,192,0.2)",rest:"rgba(107,107,107,0.2)"};
+  const dateRange=formatWeekRange(programStartDate,week.weekNumber);
+
+  // Calculate actual date for each training day
+  function getDayDate(dayIndex){
+    const weekStart=getWeekStartDate(programStartDate,week.weekNumber);
+    if(!weekStart)return null;
+    // dayIndex is 0=Mon...6=Sun, JS getDay is 0=Sun...6=Sat
+    const jsDay=weekStart.getDay(); // day of week of week start
+    // Find how many days from weekStart to reach dayIndex (Mon=0)
+    const weekStartMonBased=(jsDay+6)%7; // convert to Mon=0
+    let diff=dayIndex-weekStartMonBased;
+    if(diff<0)diff+=7;
+    const d=new Date(weekStart);
+    d.setDate(weekStart.getDate()+diff);
+    return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  }
+
   return(
     <div style={{background:"#2c2c2c",border:"1px solid #2a2a2a",borderRadius:6,overflow:"hidden",marginBottom:8}}>
       <div style={{display:"flex",alignItems:"center",padding:"12px 16px",gap:12,cursor:"pointer",userSelect:"none"}} onClick={()=>setOpen(o=>!o)}>
         <span style={{fontFamily:"DM Mono,monospace",fontSize:11,letterSpacing:2,color:"#6b6b6b",textTransform:"uppercase",minWidth:70}}>Wk {week.weekNumber}</span>
-        <span style={{fontSize:14,color:"#f0ede6",fontWeight:600,flex:1}}>{week.weekTitle}</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:14,color:"#f0ede6",fontWeight:600}}>{week.weekTitle}</div>
+          {dateRange&&<div style={{fontFamily:"DM Mono,monospace",fontSize:10,color:"#555",marginTop:2}}>{dateRange}</div>}
+        </div>
         <IntensityBar value={week.intensity}/>
         <span style={{fontFamily:"DM Mono,monospace",fontSize:10,color:"#555",marginLeft:8}}>{activeDays.length}d</span>
-        <span style={{fontSize:12,color:"#555",transition:"transform 0.2s",transform:open?"rotate(180deg)":"none"}}>▼</span>
+        <span style={{fontSize:12,color:"#555",transition:"transform 0.2s",transform:open?"rotate(180deg)":"none"}}>v</span>
       </div>
       {open&&(
         <div style={{padding:"0 16px 16px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:8}}>
           {week.days?.map((day,i)=>{
             const isTraining=day.type==="training"||day.type==="redpoint";
             const isSpecial=day.type==="redpoint";
+            const dayDate=getDayDate(day.dayIndex);
             return(
               <div key={i}
                 className={`day-card ${isTraining?"training":""}`}
                 style={{borderColor:isSpecial?"rgba(212,168,67,0.4)":"#333",background:isSpecial?"rgba(212,168,67,0.05)":"rgba(0,0,0,0.2)",opacity:!isTraining?0.5:1,borderStyle:!isTraining?"dashed":"solid"}}
                 onClick={()=>isTraining&&onLaunchDay&&onLaunchDay(day)}
               >
-                <div style={{fontFamily:"DM Mono,monospace",fontSize:10,letterSpacing:2,color:isSpecial?"#d4a843":"#6b6b6b",marginBottom:6,textTransform:"uppercase"}}>{day.dayName}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                  <div style={{fontFamily:"DM Mono,monospace",fontSize:10,letterSpacing:2,color:isSpecial?"#d4a843":"#6b6b6b",textTransform:"uppercase"}}>{day.dayName}</div>
+                  {dayDate&&<div style={{fontFamily:"DM Mono,monospace",fontSize:10,color:"#555"}}>{dayDate}</div>}
+                </div>
                 <div style={{fontSize:13,color:"#f0ede6",fontWeight:600,marginBottom:4}}>{day.workoutTitle}</div>
                 <div style={{fontSize:12,color:"#6b6b6b",lineHeight:1.5}}>{day.detail}</div>
                 <div style={{marginTop:6}}>
@@ -525,7 +563,6 @@ function WeekRow({week, onLaunchDay}){
     </div>
   );
 }
-
 // ─── SESSION LAUNCH MODAL (program day → timer setup) ────────────────────────
 function ProgramSessionModal({day, onStart, onClose}){
   const proto = dayDetailToProto(day);
@@ -849,7 +886,7 @@ function ProgramOutput({program,formData,onEdit,onSave,cueSelections,muted,setMu
             <span className="phase-weeks-text">Wk {phase.startWeek}–{phase.endWeek}</span>
           </div>
           {phase.description&&<div className="phase-desc-block">{phase.description}</div>}
-          {phase.weeks?.map((week,wi)=><WeekRow key={wi} week={week} onLaunchDay={handleLaunchDay}/>)}
+          {phase.weeks?.map((week,wi)=><WeekRow key={wi} week={week} onLaunchDay={handleLaunchDay} programStartDate={program.startDate||program.formData?.startDate}/>)}
         </div>
       ))}
       {program.keyPrinciples?.length>0&&(
