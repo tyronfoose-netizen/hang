@@ -985,10 +985,32 @@ function FreeHangView({onBack,cueSelections,muted,setMuted,sessions,setSessions}
   const[customEdges,setCustomEdges]=useLocalStorage("hb_custom_edges",[]);
   const[addedWeight,setAddedWeight]=useState(0);
   const[customProto,setCustomProto]=useLocalStorage("hb_custom",{sets:4,hangSeconds:10,restBetweenHangs:5,restBetweenSets:120,reps:3});
+  const[savedProtos,setSavedProtos]=useLocalStorage("hb_saved_protos",[]);
   const[setsOverride,setSetsOverride]=useState(null);
+  const[repsOverride,setRepsOverride]=useState(null);
   const[completedSession,setCompletedSession]=useState(null);
-  const baseProto=selectedProto===4?{...PROTOCOLS[4],...customProto}:PROTOCOLS[selectedProto];
-  const proto=selectedProto!==4&&setsOverride!=null?{...baseProto,sets:setsOverride}:baseProto;
+  const allProtos=[...PROTOCOLS,...savedProtos]; // indexes 0-4 built-in (4=custom), 5+ saved customs
+  const baseProto=selectedProto===4?{...PROTOCOLS[4],...customProto}:(allProtos[selectedProto]||PROTOCOLS[0]);
+  const proto=selectedProto!==4?{...baseProto,...(setsOverride!=null?{sets:setsOverride}:{}),...(repsOverride!=null?{reps:repsOverride}:{})}:baseProto;
+  const clearOverrides=()=>{setSetsOverride(null);setRepsOverride(null);};
+  const saveProto=name=>{
+    const n=name.trim();if(!n)return;
+    const palette=["#B07CFF","#00D4FF","#A8FF3E","#FFD600","#FF8C42"];
+    setSavedProtos(prev=>{
+      const p={id:`saved-${Date.now()}`,name:n,subtitle:"Saved protocol",description:"",color:palette[prev.length%palette.length],...customProto};
+      const existing=prev.findIndex(sp=>sp.name.toLowerCase()===n.toLowerCase());
+      if(existing>=0){const next=[...prev];next[existing]={...next[existing],...customProto,name:n};setSelectedProto(5+existing);return next;}
+      setSelectedProto(5+prev.length);
+      return[...prev,p];
+    });
+    clearOverrides();
+  };
+  const deleteSavedProto=i=>{ // i = index within savedProtos
+    setSavedProtos(prev=>prev.filter((_,j)=>j!==i));
+    if(selectedProto===5+i)setSelectedProto(0);
+    else if(selectedProto>5+i)setSelectedProto(s=>s-1);
+    clearOverrides();
+  };
 
   const handleSessionComplete=session=>{
     // Not saved yet — CompleteScreen is an approval step; save happens on approve
@@ -1005,7 +1027,7 @@ function FreeHangView({onBack,cueSelections,muted,setMuted,sessions,setSessions}
           <div className="page-title">FREE<br/>HANG</div>
           <div className="page-sub">Single session — no program needed</div>
         </div>
-        {tab==="train"&&<TrainTab selectedProto={selectedProto} setSelectedProto={i=>{setSelectedProto(i);setSetsOverride(null);}} onAdjustSets={d=>setSetsOverride(v=>Math.max(1,Math.min(12,(v??PROTOCOLS[selectedProto].sets)+d)))} selectedGrip={selectedGrip} setSelectedGrip={setSelectedGrip} selectedEdge={selectedEdge} setSelectedEdge={setSelectedEdge} customEdges={customEdges} setCustomEdges={setCustomEdges} addedWeight={addedWeight} setAddedWeight={setAddedWeight} customProto={customProto} setCustomProto={setCustomProto} proto={proto} onStart={()=>{unlockAudio();setWorkoutState("running");}}/>}
+        {tab==="train"&&<TrainTab protocols={allProtos} selectedProto={selectedProto} setSelectedProto={i=>{setSelectedProto(i);clearOverrides();}} onAdjustSets={d=>setSetsOverride(v=>Math.max(1,Math.min(12,(v??allProtos[selectedProto].sets)+d)))} onAdjustReps={d=>setRepsOverride(v=>Math.max(1,Math.min(12,(v??allProtos[selectedProto].reps)+d)))} onSaveProto={saveProto} onDeleteProto={deleteSavedProto} selectedGrip={selectedGrip} setSelectedGrip={setSelectedGrip} selectedEdge={selectedEdge} setSelectedEdge={setSelectedEdge} customEdges={customEdges} setCustomEdges={setCustomEdges} addedWeight={addedWeight} setAddedWeight={setAddedWeight} customProto={customProto} setCustomProto={setCustomProto} proto={proto} onStart={()=>{unlockAudio();setWorkoutState("running");}}/>}
         {tab==="history"&&<HistoryTab sessions={sessions} onClear={()=>setSessions([])}/>}
         {tab==="progress"&&<ProgressTab sessions={sessions}/>}
       </div>
@@ -1025,10 +1047,11 @@ function stepSeconds(v,d){
     ?(v<20?v+1:v<60?Math.min(60,v+10):v+30)
     :(v>60?Math.max(60,v-30):v>20?Math.max(20,v-10):v-1);
 }
-function TrainTab({selectedProto,setSelectedProto,onAdjustSets,selectedGrip,setSelectedGrip,selectedEdge,setSelectedEdge,customEdges,setCustomEdges,addedWeight,setAddedWeight,customProto,setCustomProto,proto,onStart}){
+function TrainTab({protocols,selectedProto,setSelectedProto,onAdjustSets,onAdjustReps,onSaveProto,onDeleteProto,selectedGrip,setSelectedGrip,selectedEdge,setSelectedEdge,customEdges,setCustomEdges,addedWeight,setAddedWeight,customProto,setCustomProto,proto,onStart}){
   const[showCustom,setShowCustom]=useState(false);
   const[customInput,setCustomInput]=useState("");
   const[customErr,setCustomErr]=useState("");
+  const[protoName,setProtoName]=useState("");
   const allEdges=[...EDGE_SIZES,...customEdges];
   const totalTime=proto.sets*(proto.reps*proto.hangSeconds+(proto.reps-1)*proto.restBetweenHangs+proto.restBetweenSets);
   const addEdge=()=>{
@@ -1040,22 +1063,26 @@ function TrainTab({selectedProto,setSelectedProto,onAdjustSets,selectedGrip,setS
   return(
     <>
       <p className="section-title">Protocol</p>
-      {PROTOCOLS.map((p,i)=>(
+      {protocols.map((p,i)=>(
         <div key={p.id} className={`protocol-card ${selectedProto===i?"selected":""}`} style={{"--sel-color":p.color}} onClick={()=>setSelectedProto(i)}>
           <div className="proto-dot" style={{background:p.color}}/>
           <div className="proto-info">
             <div className="proto-name">{p.name}</div>
             <div className="proto-sub">{p.subtitle}</div>
-            <div className="proto-desc">{p.description}</div>
+            {p.description&&<div className="proto-desc">{p.description}</div>}
             {i!==4&&<div className="proto-meta">{p.sets} sets · {p.reps}×{p.hangSeconds}s hang · {p.restBetweenSets}s rest</div>}
           </div>
-          <span style={{fontSize:20,color:"var(--muted)"}}>›</span>
+          {i>=5?(
+            <span onClick={ev=>{ev.stopPropagation();onDeleteProto(i-5);}} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:20,height:20,borderRadius:"50%",background:"var(--surface2)",color:"var(--muted)",fontSize:10,cursor:"pointer",flexShrink:0}}>✕</span>
+          ):(
+            <span style={{fontSize:20,color:"var(--muted)"}}>›</span>
+          )}
         </div>
       ))}
       {selectedProto===4&&(
         <><p className="section-title" style={{marginTop:4}}>Custom Settings</p>
         <div className="card">
-          {[{label:"Sets",key:"sets",min:1,max:12,ladder:false},{label:"Hang Time (s)",key:"hangSeconds",min:3,max:20,ladder:false},{label:"Rest Time (s)",key:"restBetweenHangs",min:3,max:300,ladder:true},{label:"Reps/set",key:"reps",min:1,max:12,ladder:false},{label:"Rest/set (s)",key:"restBetweenSets",min:30,max:300,ladder:true}].map(({label,key,min,max,ladder})=>(
+          {[{label:"Hang Time (s)",key:"hangSeconds",min:3,max:20,ladder:false},{label:"Rest Time (s)",key:"restBetweenHangs",min:3,max:300,ladder:true},{label:"Reps/set",key:"reps",min:1,max:12,ladder:false},{label:"Sets",key:"sets",min:1,max:12,ladder:false},{label:"Rest/set (s)",key:"restBetweenSets",min:30,max:300,ladder:true}].map(({label,key,min,max,ladder})=>(
             <div key={key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <span style={{fontSize:14,color:"var(--muted)"}}>{label}</span>
               <div className="stepper">
@@ -1065,6 +1092,13 @@ function TrainTab({selectedProto,setSelectedProto,onAdjustSets,selectedGrip,setS
               </div>
             </div>
           ))}
+          <div style={{borderTop:"1px solid var(--border)",paddingTop:14,marginTop:2}}>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:8}}>Save this protocol to the menu:</div>
+            <div style={{display:"flex",gap:8}}>
+              <input type="text" value={protoName} onChange={e=>setProtoName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&protoName.trim()){onSaveProto(protoName);setProtoName("");}}} placeholder="Protocol name" style={{flex:1,background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10,padding:"10px 14px",color:"var(--text)",fontFamily:"DM Mono,monospace",fontSize:14,outline:"none",minWidth:0}}/>
+              <button onClick={()=>{if(protoName.trim()){onSaveProto(protoName);setProtoName("");}}} style={{background:protoName.trim()?"var(--accent)":"var(--surface2)",border:"none",borderRadius:10,color:protoName.trim()?"#fff":"var(--muted)",padding:"10px 16px",fontFamily:"Bebas Neue,sans-serif",fontSize:15,letterSpacing:"0.05em",cursor:"pointer"}}>SAVE</button>
+            </div>
+          </div>
         </div></>
       )}
       <p className="section-title" style={{marginTop:8}}>Grip Type</p>
@@ -1109,7 +1143,13 @@ function TrainTab({selectedProto,setSelectedProto,onAdjustSets,selectedGrip,setS
             <button onClick={()=>selectedProto===4?setCustomProto(p=>({...p,sets:Math.min(12,p.sets+1)})):onAdjustSets(1)} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text)",width:22,height:22,lineHeight:1,fontSize:14,cursor:"pointer",padding:0}}>+</button>
           </span>
         </div>
-        <div className="setup-chip">Reps<strong>{proto.reps}×{proto.hangSeconds}s</strong></div>
+        <div className="setup-chip">Reps
+          <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+            <button onClick={()=>selectedProto===4?setCustomProto(p=>({...p,reps:Math.max(1,p.reps-1)})):onAdjustReps(-1)} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text)",width:22,height:22,lineHeight:1,fontSize:14,cursor:"pointer",padding:0}}>−</button>
+            <strong>{proto.reps}×{proto.hangSeconds}s</strong>
+            <button onClick={()=>selectedProto===4?setCustomProto(p=>({...p,reps:Math.min(12,p.reps+1)})):onAdjustReps(1)} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text)",width:22,height:22,lineHeight:1,fontSize:14,cursor:"pointer",padding:0}}>+</button>
+          </span>
+        </div>
         <div className="setup-chip">Total<strong>{fmtTime(totalTime)}</strong></div>
       </div>
       <button className="start-btn" onClick={onStart}>START SESSION</button>
