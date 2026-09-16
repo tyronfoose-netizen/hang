@@ -70,23 +70,25 @@ function pickVoice(kind){
       ||vs.find(v=>v.lang?.startsWith("en")&&/female|woman/i.test(v.name))
       ||vs.find(v=>v.lang?.startsWith("en"))||vs[0];
   }
-  // Austrian: prefer de-AT, then any German voice; English text through it = heavy accent
-  const at=vs.filter(v=>v.lang==="de-AT"),de=vs.filter(v=>v.lang?.startsWith("de"));
-  const malePrefs=["Michael","Markus","Viktor","Hans","Stefan","Conrad","Yannick","Google Deutsch"];
-  return at.find(v=>malePrefs.some(n=>v.name.includes(n)))||at[0]
-    ||de.find(v=>malePrefs.some(n=>v.name.includes(n)))||de[0]
-    ||vs.find(v=>v.lang?.startsWith("en")&&/Daniel|Aaron|Fred|male|man/i.test(v.name))||vs[0];
+  // Deep male: English voices only (no German — it reads numbers as German words),
+  // pitched down for a deep, masculine delivery
+  const malePrefs=["Daniel","Alex","Aaron","Fred","Oliver","Reed","Rocko","Google UK English Male","Guy","David"];
+  return vs.find(v=>v.lang?.startsWith("en")&&malePrefs.some(n=>v.name.includes(n)))
+    ||vs.find(v=>v.lang?.startsWith("en")&&/male|man/i.test(v.name))
+    ||vs.find(v=>v.lang?.startsWith("en"))||vs[0];
 }
 function speak(text,kind){
   try{
     const ss=window.speechSynthesis;if(!ss)return;
     const u=new SpeechSynthesisUtterance(text);
     const v=pickVoice(kind);if(v)u.voice=v;
-    if(kind==="austrian"){u.rate=0.82;u.pitch=0.62;}
+    u.lang="en-US";
+    if(kind==="austrian"){u.rate=0.85;u.pitch=0.5;} // deep + slow = masculine
     else{u.rate=1.05;u.pitch=1.0;}
     u.volume=1;ss.speak(u);
   }catch{/* speech unavailable — non-fatal */}
 }
+const NUM_WORDS={1:"one",2:"two",3:"three",4:"four",5:"five"};
 function spokenDuration(secs){
   if(secs>=60){
     const m=Math.floor(secs/60),s=secs%60;
@@ -100,8 +102,8 @@ const COUNTDOWN_SOUNDS=[
   {id:"gym-blip",name:"Gym Blip",desc:"Short punchy buzzer blip",color:"#FFD600",play(ac){pt(ac,{freq:440,type:"sawtooth",gain:0.3,dur:0.07,atk:0.001,dec:0.01,sus:0.8,rel:0.01});}},
   {id:"soft-chime",name:"Soft Chime",desc:"Gentle triangle-wave bell",color:"#FF9ECD",play(ac){pt(ac,{freq:1047,type:"triangle",gain:0.35,dur:0.22,atk:0.003,dec:0.08,sus:0.4,rel:0.12});}},
   {id:"wood-knock",name:"Wood Knock",desc:"Percussive wooden knock",color:"#D4845A",play(ac){pt(ac,{freq:200,type:"triangle",gain:0.5,dur:0.05,atk:0.001,dec:0.01,sus:0.2,rel:0.02});pt(ac,{freq:100,type:"sine",gain:0.4,dur:0.07});}},
-  {id:"voice-her",name:"Coach (Her)",desc:"A woman's voice counts 3-2-1",color:"#FF9ECD",play(ac,o){speak(String(o?.n??3),"female");}},
-  {id:"voice-austrian",name:"The Austrian",desc:"Thick Austrian accent counts you down",color:"#FF8C42",play(ac,o){speak(String(o?.n??3),"austrian");}},
+  {id:"voice-her",name:"Coach (Her)",desc:"A woman's voice counts three-two-one",color:"#FF9ECD",play(ac,o){speak(NUM_WORDS[o?.n]??"three","female");}},
+  {id:"voice-austrian",name:"Coach (Him)",desc:"Deep male voice counts three-two-one",color:"#FF8C42",play(ac,o){speak(NUM_WORDS[o?.n]??"three","austrian");}},
 ];
 const HANG_START_SOUNDS=[
   {id:"crisp-go",name:"Crisp Go",desc:"Two ascending sine tones",color:"#00D4FF",play(ac){pt(ac,{freq:880,type:"sine",gain:0.5,dur:0.1,atk:0.005,dec:0.03,sus:0.5,rel:0.03});pt(ac,{freq:1320,type:"sine",gain:0.5,dur:0.15,delay:0.12});}},
@@ -111,7 +113,7 @@ const HANG_START_SOUNDS=[
   {id:"power-chord",name:"Power Chord",desc:"Punchy synth power chord stab",color:"#FF8C42",play(ac){[110,165,220,330].forEach((f,i)=>pt(ac,{freq:f,type:"square",gain:0.22,dur:0.28,delay:i*0.02}));}},
   {id:"long-beep",name:"Long Beep",desc:"Sustained 1.8-second tone",color:"#A8FF3E",play(ac){pt(ac,{freq:880,type:"sine",gain:0.5,dur:1.8,atk:0.01,dec:0.1,sus:0.85,rel:0.2});}},
   {id:"voice-her",name:"Coach (Her)",desc:"She says “Hang!”",color:"#FF9ECD",play(){speak("Hang!","female");}},
-  {id:"voice-austrian",name:"The Austrian",desc:"“Hang!” — thick Austrian accent",color:"#FF8C42",play(){speak("Hang!","austrian");}},
+  {id:"voice-austrian",name:"Coach (Him)",desc:"“Hang!” — deep male voice",color:"#FF8C42",play(){speak("Hang!","austrian");}},
 ];
 const HANG_END_SOUNDS=[
   {id:"crisp-stop",name:"Crisp Stop",desc:"Two descending sine tones",color:"#00D4FF",play(ac){pt(ac,{freq:1100,type:"sine",gain:0.45,dur:0.1});pt(ac,{freq:660,type:"sine",gain:0.45,dur:0.15,delay:0.12});}},
@@ -120,19 +122,19 @@ const HANG_END_SOUNDS=[
   {id:"drop-off",name:"Drop Off",desc:"Wobbly pitch drop — let go!",color:"#FF2D78",play(ac){pitchSweep(ac,{startFreq:600,endFreq:80,type:"triangle",gain:0.45,dur:0.35});}},
   {id:"thud",name:"Thud",desc:"Heavy low percussion hit",color:"#D4845A",play(ac){pt(ac,{freq:80,type:"sine",gain:0.7,dur:0.18});}},
   {id:"voice-her",name:"Coach (Her)",desc:"She says “Rest”",color:"#FF9ECD",play(){speak("Rest","female");}},
-  {id:"voice-austrian",name:"The Austrian",desc:"“Rest” — thick Austrian accent",color:"#FF8C42",play(){speak("Rest","austrian");}},
+  {id:"voice-austrian",name:"Coach (Him)",desc:"“Rest” — deep male voice",color:"#FF8C42",play(){speak("Rest","austrian");}},
 ];
 const COMPLETE_SOUNDS=[
   {id:"crisp-fanfare",name:"Crisp Fanfare",desc:"Bright ascending victory arpeggio",color:"#00D4FF",play(ac){[523.25,659.25,783.99,1046.5].forEach((f,i)=>pt(ac,{freq:f,type:"sine",gain:0.45,dur:0.18,delay:i*0.15}));}},
   {id:"triumph-brass",name:"Triumph Brass",desc:"Bold stadium brass fanfare burst",color:"#FFD600",play(ac){[220,277.18,329.63,415.30,440].forEach((f,i)=>pt(ac,{freq:f,type:"sawtooth",gain:0.3,dur:0.22,delay:i*0.12}));}},
   {id:"summit-bells",name:"Summit Bells",desc:"Cascading mountain chime bells",color:"#FF9ECD",play(ac){[1046.5,1318.5,1568,2093,1568,1318.5,1046.5,2093].forEach((f,i)=>pt(ac,{freq:f,type:"triangle",gain:0.38,dur:0.6+i*0.08,delay:i*0.16}));}},
   {id:"voice-her",name:"Coach (Her)",desc:"“Final set completed”",color:"#FF9ECD",play(){speak("Final set completed. Great work.","female");}},
-  {id:"voice-austrian",name:"The Austrian",desc:"“Final set completed” — Austrian accent",color:"#FF8C42",play(){speak("Final set completed. Great work.","austrian");}},
+  {id:"voice-austrian",name:"Coach (Him)",desc:"“Final set completed” — deep male voice",color:"#FF8C42",play(){speak("Final set completed. Great work.","austrian");}},
 ];
 const REST_START_SOUNDS=[
   {id:"none",name:"None",desc:"No announcement",color:"#666680",play(){}},
   {id:"voice-her",name:"Coach (Her)",desc:"“Next set in 2 minutes”",color:"#FF9ECD",play(ac,o){speak(`Next set in ${spokenDuration(o?.secs??120)}`,"female");}},
-  {id:"voice-austrian",name:"The Austrian",desc:"Same call, thick Austrian accent",color:"#FF8C42",play(ac,o){speak(`Next set in ${spokenDuration(o?.secs??120)}`,"austrian");}},
+  {id:"voice-austrian",name:"Coach (Him)",desc:"Same call, deep male voice",color:"#FF8C42",play(ac,o){speak(`Next set in ${spokenDuration(o?.secs??120)}`,"austrian");}},
 ];
 const CUE_DEFS=[
   {key:"countdown",icon:"⏱",label:"Countdown",desc:"3 ticks before each hang",sounds:COUNTDOWN_SOUNDS,defaultId:"crisp-tick"},
@@ -1377,11 +1379,20 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
         keepAlive.connect(kg);kg.connect(kac.destination);keepAlive.start();
       }
     }catch{/* audio unavailable — non-fatal */}
+    // Screen wake lock: keep the phone awake for the whole session so long
+    // rests don't auto-lock the screen (which also killed audio cues).
+    let wakeLock=null;
+    const acquireWake=async()=>{
+      try{wakeLock=await navigator.wakeLock?.request("screen");}catch{/* unsupported or denied — non-fatal */}
+    };
+    acquireWake();
     const recover=()=>{
       const a=window.__hangio_ac;
       if(a&&a.state!=="running")a.resume().catch(()=>{});
       const s=window.__hangio_silence;
       if(s&&s.paused)s.play().catch(()=>{});
+      // Wake locks auto-release when the page is hidden — re-acquire on return
+      if(document.visibilityState==="visible"&&(!wakeLock||wakeLock.released))acquireWake();
     };
     document.addEventListener("visibilitychange",recover);
     document.addEventListener("pointerdown",recover,true);
@@ -1432,6 +1443,7 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
       document.removeEventListener("pointerdown",recover,true);
       try{if(keepAlive)keepAlive.stop();}catch{/* already stopped */}
       stopSilenceLoop();
+      try{wakeLock?.release();}catch{/* already released */}
     };
   },[]);
   const handlePause=()=>{
