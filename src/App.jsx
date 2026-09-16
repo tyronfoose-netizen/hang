@@ -54,12 +54,54 @@ function pitchSweep(ac,{startFreq,endFreq,type="sawtooth",gain=0.45,dur=0.3,dela
   env.gain.setValueAtTime(gain,t);env.gain.exponentialRampToValueAtTime(0.001,t+dur+0.02);
   osc.connect(env);env.connect(ac.destination);osc.start(t);osc.stop(t+dur+0.05);
 }
+// ─── VOICE CUES ───────────────────────────────────────────────────────────────
+// Uses the device's speech synthesis. "Her" = best female English voice on the
+// device. "Austrian" = a German/Austrian voice speaking English — thick accent.
+let __voices=[];
+function refreshVoices(){try{__voices=window.speechSynthesis?.getVoices()||[];}catch{__voices=[];}}
+refreshVoices();
+try{window.speechSynthesis?.addEventListener("voiceschanged",refreshVoices);}catch{/* no TTS */}
+function pickVoice(kind){
+  const vs=__voices.length?__voices:(window.speechSynthesis?.getVoices()||[]);
+  if(!vs.length)return null;
+  if(kind==="female"){
+    const prefs=["Samantha","Karen","Ava","Allison","Susan","Zoe","Moira","Tessa","Martha","Serena","Victoria","Zira","Jenny","Google US English"];
+    return vs.find(v=>v.lang?.startsWith("en")&&prefs.some(n=>v.name.includes(n)))
+      ||vs.find(v=>v.lang?.startsWith("en")&&/female|woman/i.test(v.name))
+      ||vs.find(v=>v.lang?.startsWith("en"))||vs[0];
+  }
+  // Austrian: prefer de-AT, then any German voice; English text through it = heavy accent
+  const at=vs.filter(v=>v.lang==="de-AT"),de=vs.filter(v=>v.lang?.startsWith("de"));
+  const malePrefs=["Michael","Markus","Viktor","Hans","Stefan","Conrad","Yannick","Google Deutsch"];
+  return at.find(v=>malePrefs.some(n=>v.name.includes(n)))||at[0]
+    ||de.find(v=>malePrefs.some(n=>v.name.includes(n)))||de[0]
+    ||vs.find(v=>v.lang?.startsWith("en")&&/Daniel|Aaron|Fred|male|man/i.test(v.name))||vs[0];
+}
+function speak(text,kind){
+  try{
+    const ss=window.speechSynthesis;if(!ss)return;
+    const u=new SpeechSynthesisUtterance(text);
+    const v=pickVoice(kind);if(v)u.voice=v;
+    if(kind==="austrian"){u.rate=0.82;u.pitch=0.62;}
+    else{u.rate=1.05;u.pitch=1.0;}
+    u.volume=1;ss.speak(u);
+  }catch{/* speech unavailable — non-fatal */}
+}
+function spokenDuration(secs){
+  if(secs>=60){
+    const m=Math.floor(secs/60),s=secs%60;
+    return s===0?`${m} minute${m>1?"s":""}`:`${m} minute${m>1?"s":""} ${s} seconds`;
+  }
+  return `${secs} seconds`;
+}
 const COUNTDOWN_SOUNDS=[
   {id:"crisp-tick",name:"Crisp Tick",desc:"Sharp hi-pitched metronome click",color:"#00D4FF",play(ac){pt(ac,{freq:1320,type:"square",gain:0.25,dur:0.08,atk:0.002,dec:0.02,sus:0.1,rel:0.02});}},
   {id:"cave-pulse",name:"Cave Pulse",desc:"Low resonant bass thud",color:"#A8FF3E",play(ac){pt(ac,{freq:180,type:"sine",gain:0.6,dur:0.18,atk:0.01,dec:0.06,sus:0.3,rel:0.08});pt(ac,{freq:360,type:"sine",gain:0.2,dur:0.15});}},
   {id:"gym-blip",name:"Gym Blip",desc:"Short punchy buzzer blip",color:"#FFD600",play(ac){pt(ac,{freq:440,type:"sawtooth",gain:0.3,dur:0.07,atk:0.001,dec:0.01,sus:0.8,rel:0.01});}},
   {id:"soft-chime",name:"Soft Chime",desc:"Gentle triangle-wave bell",color:"#FF9ECD",play(ac){pt(ac,{freq:1047,type:"triangle",gain:0.35,dur:0.22,atk:0.003,dec:0.08,sus:0.4,rel:0.12});}},
   {id:"wood-knock",name:"Wood Knock",desc:"Percussive wooden knock",color:"#D4845A",play(ac){pt(ac,{freq:200,type:"triangle",gain:0.5,dur:0.05,atk:0.001,dec:0.01,sus:0.2,rel:0.02});pt(ac,{freq:100,type:"sine",gain:0.4,dur:0.07});}},
+  {id:"voice-her",name:"Coach (Her)",desc:"A woman's voice counts 3-2-1",color:"#FF9ECD",play(ac,o){speak(String(o?.n??3),"female");}},
+  {id:"voice-austrian",name:"The Austrian",desc:"Thick Austrian accent counts you down",color:"#FF8C42",play(ac,o){speak(String(o?.n??3),"austrian");}},
 ];
 const HANG_START_SOUNDS=[
   {id:"crisp-go",name:"Crisp Go",desc:"Two ascending sine tones",color:"#00D4FF",play(ac){pt(ac,{freq:880,type:"sine",gain:0.5,dur:0.1,atk:0.005,dec:0.03,sus:0.5,rel:0.03});pt(ac,{freq:1320,type:"sine",gain:0.5,dur:0.15,delay:0.12});}},
@@ -67,6 +109,9 @@ const HANG_START_SOUNDS=[
   {id:"gym-buzz",name:"Gym Buzz",desc:"Aggressive start buzzer",color:"#FFD600",play(ac){pt(ac,{freq:330,type:"sawtooth",gain:0.45,dur:0.35,atk:0.002,dec:0.05,sus:0.85,rel:0.08});}},
   {id:"laser-fire",name:"Laser Fire",desc:"Sci-fi descending frequency sweep",color:"#FF2D78",play(ac){pitchSweep(ac,{startFreq:1200,endFreq:200,type:"sawtooth",gain:0.5,dur:0.25});}},
   {id:"power-chord",name:"Power Chord",desc:"Punchy synth power chord stab",color:"#FF8C42",play(ac){[110,165,220,330].forEach((f,i)=>pt(ac,{freq:f,type:"square",gain:0.22,dur:0.28,delay:i*0.02}));}},
+  {id:"long-beep",name:"Long Beep",desc:"Sustained 1.8-second tone",color:"#A8FF3E",play(ac){pt(ac,{freq:880,type:"sine",gain:0.5,dur:1.8,atk:0.01,dec:0.1,sus:0.85,rel:0.2});}},
+  {id:"voice-her",name:"Coach (Her)",desc:"She says “Hang!”",color:"#FF9ECD",play(){speak("Hang!","female");}},
+  {id:"voice-austrian",name:"The Austrian",desc:"“Hang!” — thick Austrian accent",color:"#FF8C42",play(){speak("Hang!","austrian");}},
 ];
 const HANG_END_SOUNDS=[
   {id:"crisp-stop",name:"Crisp Stop",desc:"Two descending sine tones",color:"#00D4FF",play(ac){pt(ac,{freq:1100,type:"sine",gain:0.45,dur:0.1});pt(ac,{freq:660,type:"sine",gain:0.45,dur:0.15,delay:0.12});}},
@@ -74,16 +119,26 @@ const HANG_END_SOUNDS=[
   {id:"gym-double",name:"Gym Double",desc:"Double buzzer stop signal",color:"#FFD600",play(ac){pt(ac,{freq:220,type:"sawtooth",gain:0.4,dur:0.12});pt(ac,{freq:220,type:"sawtooth",gain:0.4,dur:0.12,delay:0.18});}},
   {id:"drop-off",name:"Drop Off",desc:"Wobbly pitch drop — let go!",color:"#FF2D78",play(ac){pitchSweep(ac,{startFreq:600,endFreq:80,type:"triangle",gain:0.45,dur:0.35});}},
   {id:"thud",name:"Thud",desc:"Heavy low percussion hit",color:"#D4845A",play(ac){pt(ac,{freq:80,type:"sine",gain:0.7,dur:0.18});}},
+  {id:"voice-her",name:"Coach (Her)",desc:"She says “Rest”",color:"#FF9ECD",play(){speak("Rest","female");}},
+  {id:"voice-austrian",name:"The Austrian",desc:"“Rest” — thick Austrian accent",color:"#FF8C42",play(){speak("Rest","austrian");}},
 ];
 const COMPLETE_SOUNDS=[
   {id:"crisp-fanfare",name:"Crisp Fanfare",desc:"Bright ascending victory arpeggio",color:"#00D4FF",play(ac){[523.25,659.25,783.99,1046.5].forEach((f,i)=>pt(ac,{freq:f,type:"sine",gain:0.45,dur:0.18,delay:i*0.15}));}},
   {id:"triumph-brass",name:"Triumph Brass",desc:"Bold stadium brass fanfare burst",color:"#FFD600",play(ac){[220,277.18,329.63,415.30,440].forEach((f,i)=>pt(ac,{freq:f,type:"sawtooth",gain:0.3,dur:0.22,delay:i*0.12}));}},
   {id:"summit-bells",name:"Summit Bells",desc:"Cascading mountain chime bells",color:"#FF9ECD",play(ac){[1046.5,1318.5,1568,2093,1568,1318.5,1046.5,2093].forEach((f,i)=>pt(ac,{freq:f,type:"triangle",gain:0.38,dur:0.6+i*0.08,delay:i*0.16}));}},
+  {id:"voice-her",name:"Coach (Her)",desc:"“Final set completed”",color:"#FF9ECD",play(){speak("Final set completed. Great work.","female");}},
+  {id:"voice-austrian",name:"The Austrian",desc:"“Final set completed” — Austrian accent",color:"#FF8C42",play(){speak("Final set completed. Great work.","austrian");}},
+];
+const REST_START_SOUNDS=[
+  {id:"none",name:"None",desc:"No announcement",color:"#666680",play(){}},
+  {id:"voice-her",name:"Coach (Her)",desc:"“Next set in 2 minutes”",color:"#FF9ECD",play(ac,o){speak(`Next set in ${spokenDuration(o?.secs??120)}`,"female");}},
+  {id:"voice-austrian",name:"The Austrian",desc:"Same call, thick Austrian accent",color:"#FF8C42",play(ac,o){speak(`Next set in ${spokenDuration(o?.secs??120)}`,"austrian");}},
 ];
 const CUE_DEFS=[
   {key:"countdown",icon:"⏱",label:"Countdown",desc:"3 ticks before each hang",sounds:COUNTDOWN_SOUNDS,defaultId:"crisp-tick"},
   {key:"hangStart",icon:"🟢",label:"Hang Start",desc:"When hang phase begins",sounds:HANG_START_SOUNDS,defaultId:"crisp-go"},
   {key:"hangEnd",icon:"🔴",label:"Hang End",desc:"When hang phase ends",sounds:HANG_END_SOUNDS,defaultId:"crisp-stop"},
+  {key:"restStart",icon:"⏲",label:"Rest Start",desc:"Announce the between-set rest",sounds:REST_START_SOUNDS,defaultId:"none"},
   {key:"complete",icon:"🏔",label:"Complete",desc:"All sets finished",sounds:COMPLETE_SOUNDS,defaultId:"crisp-fanfare"},
 ];
 function getDefaultCueSelections(){return Object.fromEntries(CUE_DEFS.map(c=>[c.key,c.defaultId]));}
@@ -125,6 +180,11 @@ function unlockAudio(){
     window.__hangio_ac=ac;
   }catch(e){console.log("audio unlock failed",e);}
   startSilenceLoop();
+  // Prime speech synthesis inside the gesture so voice cues can fire later
+  try{
+    const ss=window.speechSynthesis;
+    if(ss){refreshVoices();const u=new SpeechSynthesisUtterance(" ");u.volume=0;ss.speak(u);}
+  }catch{/* no TTS — non-fatal */}
 }
 
 // ─── SOUND ENGINE ─────────────────────────────────────────────────────────────
@@ -136,20 +196,20 @@ function useSoundEngine(cueSelections,muted){
     if(ac&&ac.state!=="running")ac.resume().catch(()=>{});
     return ac;
   },[]);
-  const play=useCallback((cue)=>{
+  const play=useCallback((cue,opts)=>{
     if(muted)return;const ac=ensureAC();if(!ac)return;
     const def=CUE_DEFS.find(c=>c.key===cue);if(!def)return;
     const id=cueSelections[cue]||def.defaultId;
     const snd=def.sounds.find(s=>s.id===id)||def.sounds[0];
     // If the context is suspended/interrupted, play AFTER resume resolves —
     // sounds scheduled on a frozen clock never fire.
-    if(ac.state==="running")snd.play(ac);
-    else ac.resume().then(()=>snd.play(ac)).catch(()=>{});
+    if(ac.state==="running")snd.play(ac,opts);
+    else ac.resume().then(()=>snd.play(ac,opts)).catch(()=>{});
   },[cueSelections,muted,ensureAC]);
   const playPreview=useCallback((cue,soundId)=>{
     const ac=ensureAC();if(!ac)return;
     const def=CUE_DEFS.find(c=>c.key===cue);if(!def)return;
-    (def.sounds.find(s=>s.id===soundId)||def.sounds[0]).play(ac);
+    (def.sounds.find(s=>s.id===soundId)||def.sounds[0]).play(ac,{n:3,secs:120});
   },[ensureAC]);
   return{play,playPreview};
 }
@@ -187,6 +247,65 @@ function dayDetailToProto(day) {
   base.name = day.workoutTitle || "Program Workout";
   base.color = "#e05c34";
   return base;
+}
+
+// ─── ADAPT PROGRAM FROM ANALYTICS ────────────────────────────────────────────
+function currentProgramWeek(program){
+  const start=program.startDate||program.formData?.startDate;
+  if(!start)return 1;
+  const w=Math.floor((Date.now()-new Date(start+"T00:00:00").getTime())/(7*24*3600*1000))+1;
+  return Math.min(program.totalWeeks||1,Math.max(1,w));
+}
+function buildAdaptPrompt(program,sessions){
+  const week=currentProgramWeek(program);
+  const start=program.startDate||program.formData?.startDate;
+  const startMs=start?new Date(start+"T00:00:00").getTime():0;
+  const since=sessions.filter(s=>new Date(s.date).getTime()>=startMs).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const now=Date.now();
+  const last14=since.filter(s=>(now-new Date(s.date).getTime())<=14*24*3600*1000);
+  const daysSinceLast=since.length?Math.round((now-new Date(since[since.length-1].date).getTime())/(24*3600*1000)):null;
+  const plannedPerWeek=program.formData?.trainingDays?.length||3;
+  const weeksElapsed=Math.max(1,week-1)||1;
+  const partials=since.filter(s=>s.partial).length;
+  const half=Math.floor(since.length/2);
+  const avg=arr=>arr.length?Math.round(arr.reduce((a,s)=>a+(s.totalHangs||0),0)/arr.length*10)/10:0;
+  const earlyAvg=avg(since.slice(0,half)),recentAvg=avg(since.slice(half));
+  const rows=since.slice(-20).map(s=>`${s.date?.split("T")[0]} | ${s.protocol} | ${s.sets} sets | ${s.totalHangs} hangs | ${s.duration}s${s.partial?" | QUIT EARLY":""}${s.fromProgram?" | program":""}`).join("\n");
+  const {formData:_fd,...programCore}=program;
+  return `You are an expert climbing coach. The athlete has an active periodized program and real logged training data. Today is ${new Date().toISOString().split("T")[0]} — program week ${week} of ${program.totalWeeks}. Rewrite the program from week ${week} onward based on actual performance.
+
+CURRENT PROGRAM JSON:
+${JSON.stringify(programCore)}
+
+ACTUAL TRAINING DATA (since program start ${start||"unknown"}):
+- Planned sessions/week: ${plannedPerWeek} — actual average: ${Math.round(since.length/weeksElapsed*10)/10} (${since.length} sessions over ~${weeksElapsed} week${weeksElapsed>1?"s":""})
+- Sessions in last 14 days: ${last14.length}
+- Days since last session: ${daysSinceLast??"no sessions logged"}
+- Avg hangs/session — early half: ${earlyAvg}, recent half: ${recentAvg}
+- Sessions quit early: ${partials} of ${since.length}
+RECENT SESSIONS (oldest first):
+${rows||"none"}
+
+COACHING RULES:
+- Strong adherence (at/near planned frequency) with stable or growing hang volume: progress the remaining weeks — modestly increase intensity/volume toward the goal.
+- Poor adherence (well below planned frequency, long gaps, many early quits) or declining volume: reduce intensity, rebuild base first, and re-anchor progression so the peak date remains realistic.
+- Weeks 1 through ${week-1} are in the past — reproduce them EXACTLY as given, unchanged.
+- Keep programName, totalWeeks, startDate, and the JSON schema exactly the same. Keep every week number from 1 to ${program.totalWeeks} present.
+- Only schedule training on the same weekdays used in the current program.
+- Rewrite "summary" as 2 sentences explaining what you adjusted and why, prefixed "Adapted week ${week}:".
+- Return ONLY valid JSON, no markdown fences, no commentary.`;
+}
+function parseProgramJson(rawText){
+  let jsonStr=rawText.replace(/^```(?:json)?\s*/i,"").replace(/\s*```\s*$/i,"").trim();
+  const fb=jsonStr.indexOf("{"),lb=jsonStr.lastIndexOf("}");
+  if(fb===-1||lb===-1)throw new Error("No JSON found");
+  jsonStr=jsonStr.slice(fb,lb+1);
+  let parsed;
+  try{parsed=JSON.parse(jsonStr);}catch{
+    for(const sfx of["]}","]}]}","]}]}]}"]){try{parsed=JSON.parse(jsonStr+sfx);if(parsed)break;}catch{/* try next */}}
+  }
+  if(!parsed||!parsed.programName||!Array.isArray(parsed.phases)||!parsed.phases.length)throw new Error("Incomplete program");
+  return parsed;
 }
 
 // ─── BUILD PROMPT ─────────────────────────────────────────────────────────────
@@ -853,10 +972,27 @@ function GoalBuilder({onBack,onSave}){
 }
 
 // ─── PROGRAM OUTPUT ──────────────────────────────────────────────────────────
-function ProgramOutput({program,formData,onEdit,onSave,cueSelections,muted,setMuted,sessions,setSessions}){
+function ProgramOutput({program,formData,onEdit,onSave,onUpdateProgram,cueSelections,muted,setMuted,sessions,setSessions}){
   const[launchDay,setLaunchDay]=useState(null);
   const[runSession,setRunSession]=useState(null);
   const[completedSession,setCompletedSession]=useState(null);
+  const[adaptState,setAdaptState]=useState("idle"); // idle | confirm | loading | error
+  const[adaptErr,setAdaptErr]=useState("");
+  const adaptWeek=currentProgramWeek(program);
+  const loggedCount=(sessions||[]).length;
+  const runAdapt=async()=>{
+    setAdaptState("loading");setAdaptErr("");
+    try{
+      const body=JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:16000,messages:[{role:"user",content:buildAdaptPrompt(program,sessions||[])}]});
+      const res=await fetch("/api/generate",{method:"POST",headers:{"Content-Type":"application/json"},body});
+      if(!res.ok){let m=`API error ${res.status}`;try{const b=await res.json();m+=": "+(b?.error?.message||"").slice(0,200);}catch{/* no body */}throw new Error(m);}
+      const data=await res.json();
+      const rawText=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
+      const parsed=parseProgramJson(rawText);
+      onUpdateProgram({...parsed,formData:program.formData,savedAt:program.savedAt,adaptedAt:new Date().toISOString()});
+      setAdaptState("idle");
+    }catch(e){setAdaptErr(e.message);setAdaptState("error");}
+  };
 
   const handleLaunchDay=day=>setLaunchDay(day);
   const handleModalStart=({proto,grip,edge,weight,day})=>{
@@ -900,6 +1036,36 @@ function ProgramOutput({program,formData,onEdit,onSave,cueSelections,muted,setMu
         <span style={{fontSize:16}}>👆</span>
         <span style={{fontSize:12,color:"#e05c34"}}>Tap any training day to launch its session directly in the timer</span>
       </div>
+      {onUpdateProgram&&(
+        <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:10,padding:"14px 16px",marginBottom:20}}>
+          {adaptState==="idle"&&(
+            <div style={{display:"flex",alignItems:"center",gap:12,justifyContent:"space-between",flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:180}}>
+                <div style={{fontSize:14,fontWeight:600,color:"var(--chalk)"}}>⟳ Adapt from analytics</div>
+                <div style={{fontSize:12,color:"var(--muted)",marginTop:3}}>{loggedCount?`Rebuilds week ${adaptWeek} onward from your ${loggedCount} logged session${loggedCount!==1?"s":""}. Past weeks stay unchanged.`:"Log some sessions first — there's no training data to adapt from yet."}</div>
+                {program.adaptedAt&&<div style={{fontFamily:"DM Mono,monospace",fontSize:10,color:"var(--muted)",marginTop:4}}>Last adapted {new Date(program.adaptedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>}
+              </div>
+              <button onClick={()=>loggedCount&&setAdaptState("confirm")} style={{background:loggedCount?"rgba(224,92,52,0.12)":"var(--surface2)",border:`1px solid ${loggedCount?"rgba(224,92,52,0.4)":"var(--border)"}`,borderRadius:8,color:loggedCount?"#e05c34":"var(--muted)",padding:"10px 14px",fontFamily:"Bebas Neue,sans-serif",fontSize:14,letterSpacing:"0.05em",cursor:loggedCount?"pointer":"default"}}>ADAPT</button>
+            </div>
+          )}
+          {adaptState==="confirm"&&(
+            <div>
+              <div style={{fontSize:13,color:"var(--chalk)",lineHeight:1.5,marginBottom:12}}>The AI coach will review your session history — consistency, volume trend, early quits — and rewrite week {adaptWeek} onward: progressing the plan if you're training well, dialing it back if you've missed sessions. Weeks already behind you don't change.</div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={runAdapt} style={{flex:1,background:"var(--accent)",border:"none",borderRadius:8,color:"#fff",padding:"10px 14px",fontFamily:"Bebas Neue,sans-serif",fontSize:15,letterSpacing:"0.05em",cursor:"pointer"}}>ADAPT NOW</button>
+                <button onClick={()=>setAdaptState("idle")} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,color:"var(--muted)",padding:"10px 14px",fontFamily:"Bebas Neue,sans-serif",fontSize:15,letterSpacing:"0.05em",cursor:"pointer"}}>CANCEL</button>
+              </div>
+            </div>
+          )}
+          {adaptState==="loading"&&<div style={{fontFamily:"DM Mono,monospace",fontSize:12,color:"#e05c34",letterSpacing:1}}>⟳ Re-coaching your program from session data…</div>}
+          {adaptState==="error"&&(
+            <div>
+              <div style={{fontSize:12,color:"#e74c3c",marginBottom:8}}>Adapt failed: {adaptErr}</div>
+              <button onClick={runAdapt} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,color:"var(--text)",padding:"8px 12px",fontSize:12,cursor:"pointer"}}>Retry</button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="program-summary-grid">
         <div className="sum-cell"><div className="sum-label">Weeks</div><div className="sum-val accent">{program.totalWeeks}</div></div>
         <div className="sum-cell"><div className="sum-label">Phases</div><div className="sum-val">{program.phases?.length}</div></div>
@@ -961,7 +1127,7 @@ function SavedProgramsView({programs,onBack,onOpen,onDelete}){
   );
 }
 
-function SavedProgramDetail({program,onBack,cueSelections,muted,setMuted,sessions,setSessions}){
+function SavedProgramDetail({program,onBack,onUpdateProgram,cueSelections,muted,setMuted,sessions,setSessions}){
   return(
     <div className="saved-shell fade-up">
       <div className="goal-header">
@@ -969,7 +1135,7 @@ function SavedProgramDetail({program,onBack,cueSelections,muted,setMuted,session
         <div><div className="goal-header-title" style={{fontSize:18}}>{program.programName}</div><div className="goal-header-sub">{program.totalWeeks} weeks · {program.phases?.length} phases</div></div>
       </div>
       <div className="goal-scroll">
-        <ProgramOutput program={program} formData={program.formData} cueSelections={cueSelections} muted={muted} setMuted={setMuted} sessions={sessions} setSessions={setSessions}/>
+        <ProgramOutput program={program} formData={program.formData} onUpdateProgram={onUpdateProgram} cueSelections={cueSelections} muted={muted} setMuted={setMuted} sessions={sessions} setSessions={setSessions}/>
       </div>
     </div>
   );
@@ -1237,6 +1403,8 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
         }
         if(nPh?.type==="hang")playRef.current("hangStart");
         else if(curPh?.type==="hang")playRef.current("hangEnd");
+        // Announce the between-set rest as it begins ("Next set in …")
+        if(curPh?.type==="hang"&&nPh?.type==="rest")playRef.current("restStart",{secs:nPh.duration});
         phaseIdxRef.current=ni;
         timeLeftRef.current=nPh.duration;
         setPhaseIdx(ni);
@@ -1247,7 +1415,7 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
       const curIsPreStart=curPh?.type==="pre-start";
       const curIsRest=curPh?.type==="rest"||curPh?.type==="rest-short";
       if((curIsPreStart||curIsRest)&&nextIsHang&&(t===4||t===3||t===2)){
-        playRef.current("countdown");
+        playRef.current("countdown",{n:t-1});
       }
       // 30-seconds-left warning during between-set rest: quick triple beep
       if(curPh?.type==="rest"&&t===31){
@@ -1636,7 +1804,7 @@ export default function App(){
         <SavedProgramsView programs={savedPrograms} onBack={()=>setScreen("landing")} onOpen={p=>{setViewProgram(p);setScreen("saved-detail");}} onDelete={handleDeleteProgram}/>
       )}
       {screen==="saved-detail"&&viewProgram&&(
-        <SavedProgramDetail program={viewProgram} onBack={()=>{setViewProgram(null);setScreen("saved-programs");}} cueSelections={cueSelections} muted={muted} setMuted={setMuted} sessions={sessions} setSessions={setSessions}/>
+        <SavedProgramDetail program={viewProgram} onBack={()=>{setViewProgram(null);setScreen("saved-programs");}} onUpdateProgram={updated=>{setSavedPrograms(prev=>prev.map(p=>p.savedAt===viewProgram.savedAt?updated:p));setViewProgram(updated);}} cueSelections={cueSelections} muted={muted} setMuted={setMuted} sessions={sessions} setSessions={setSessions}/>
       )}
       {screen==="analytics"&&(
         <AnalyticsScreen sessions={sessions} savedPrograms={savedPrograms} onBack={()=>setScreen("landing")}/>
