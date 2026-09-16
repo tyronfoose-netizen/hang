@@ -89,6 +89,32 @@ const CUE_DEFS=[
 function getDefaultCueSelections(){return Object.fromEntries(CUE_DEFS.map(c=>[c.key,c.defaultId]));}
 
 // ─── AUDIO UNLOCK ─────────────────────────────────────────────────────────────
+// Silent 1s looping WAV played through an <audio> element. An actively-playing
+// media element keeps the page's audio session alive through iOS auto-lock and
+// long idle rests — a bare WebAudio oscillator does not. Without this, iOS kills
+// audio during the between-set rest and cues go silent from set 2 onward.
+function makeSilenceUrl(){
+  const sr=8000,len=sr;
+  const buf=new ArrayBuffer(44+len*2);const v=new DataView(buf);
+  const ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  ws(0,"RIFF");v.setUint32(4,36+len*2,true);ws(8,"WAVE");ws(12,"fmt ");
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+  ws(36,"data");v.setUint32(40,len*2,true);
+  return URL.createObjectURL(new Blob([buf],{type:"audio/wav"}));
+}
+function startSilenceLoop(){
+  try{
+    let a=window.__hangio_silence;
+    if(!a){
+      a=new Audio(makeSilenceUrl());
+      a.loop=true;a.setAttribute("playsinline","");
+      window.__hangio_silence=a;
+    }
+    a.play().catch(()=>{});
+  }catch{/* media unavailable — non-fatal */}
+}
+function stopSilenceLoop(){try{window.__hangio_silence?.pause();}catch{/* noop */}}
 function unlockAudio(){
   try{
     const ac=new(window.AudioContext||window.webkitAudioContext)();
@@ -98,6 +124,7 @@ function unlockAudio(){
     if(ac.state==="suspended")ac.resume();
     window.__hangio_ac=ac;
   }catch(e){console.log("audio unlock failed",e);}
+  startSilenceLoop();
 }
 
 // ─── SOUND ENGINE ─────────────────────────────────────────────────────────────
@@ -113,7 +140,11 @@ function useSoundEngine(cueSelections,muted){
     if(muted)return;const ac=ensureAC();if(!ac)return;
     const def=CUE_DEFS.find(c=>c.key===cue);if(!def)return;
     const id=cueSelections[cue]||def.defaultId;
-    (def.sounds.find(s=>s.id===id)||def.sounds[0]).play(ac);
+    const snd=def.sounds.find(s=>s.id===id)||def.sounds[0];
+    // If the context is suspended/interrupted, play AFTER resume resolves —
+    // sounds scheduled on a frozen clock never fire.
+    if(ac.state==="running")snd.play(ac);
+    else ac.resume().then(()=>snd.play(ac)).catch(()=>{});
   },[cueSelections,muted,ensureAC]);
   const playPreview=useCallback((cue,soundId)=>{
     const ac=ensureAC();if(!ac)return;
@@ -829,12 +860,13 @@ function ProgramOutput({program,formData,onEdit,onSave,cueSelections,muted,setMu
 
   const handleLaunchDay=day=>setLaunchDay(day);
   const handleModalStart=({proto,grip,edge,weight,day})=>{
+    unlockAudio(); // must happen inside the tap gesture or iOS blocks all cues
     setLaunchDay(null);
     setRunSession({proto,grip,edge,weight,day});
   };
   const handleSessionComplete=session=>{
-    const s={...session,protocol:session.proto?.name||"Program Workout",grip:session.grip,edge:session.edge,addedWeight:session.weight||0,date:new Date().toISOString(),fromProgram:program.programName,programDay:session.day?.workoutTitle};
-    if(setSessions)setSessions(prev=>[s,...prev]);
+    // Not saved yet — CompleteScreen is an approval step; save happens on approve
+    const s={...session,protocol:session.proto?.name||"Program Workout",grip:runSession?.grip,edge:runSession?.edge,addedWeight:runSession?.weight||0,date:new Date().toISOString(),fromProgram:program.programName,programDay:runSession?.day?.workoutTitle};
     setCompletedSession(s);setRunSession(null);
   };
 
@@ -959,8 +991,9 @@ function FreeHangView({onBack,cueSelections,muted,setMuted,sessions,setSessions}
   const proto=selectedProto!==4&&setsOverride!=null?{...baseProto,sets:setsOverride}:baseProto;
 
   const handleSessionComplete=session=>{
+    // Not saved yet — CompleteScreen is an approval step; save happens on approve
     const s={...session,protocol:proto.name,grip:GRIPS[selectedGrip],edge:selectedEdge,addedWeight,date:new Date().toISOString()};
-    setSessions(prev=>[s,...prev]);setCompletedSession(s);setWorkoutState("complete");
+    setCompletedSession(s);setWorkoutState("complete");
   };
   if(workoutState==="running")return(<div className="app"><WorkoutScreen proto={proto} grip={GRIPS[selectedGrip]} edge={selectedEdge} addedWeight={addedWeight} cueSelections={cueSelections} muted={muted} setMuted={setMuted} onComplete={handleSessionComplete} onExit={()=>setWorkoutState("idle")}/></div>);
   if(workoutState==="complete"&&completedSession)return(<div className="app"><CompleteScreen session={completedSession} onDone={()=>{setWorkoutState("idle");setTab("history");}} setSessions={setSessions}/></div>);
@@ -1138,11 +1171,16 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
         keepAlive.connect(kg);kg.connect(kac.destination);keepAlive.start();
       }
     }catch{/* audio unavailable — non-fatal */}
-    const onVis=()=>{const a=window.__hangio_ac;if(a&&a.state!=="running")a.resume().catch(()=>{});};
-    document.addEventListener("visibilitychange",onVis);
-    const tick=()=>{
+    const recover=()=>{
       const a=window.__hangio_ac;
       if(a&&a.state!=="running")a.resume().catch(()=>{});
+      const s=window.__hangio_silence;
+      if(s&&s.paused)s.play().catch(()=>{});
+    };
+    document.addEventListener("visibilitychange",recover);
+    document.addEventListener("pointerdown",recover,true);
+    const tick=()=>{
+      recover();
       if(pausedRef.current)return;
       const idx=phaseIdxRef.current;
       const t=timeLeftRef.current;
@@ -1171,6 +1209,10 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
       if((curIsPreStart||curIsRest)&&nextIsHang&&(t===4||t===3||t===2)){
         playRef.current("countdown");
       }
+      // 30-seconds-left warning during between-set rest: quick triple beep
+      if(curPh?.type==="rest"&&t===31){
+        [0,180,360].forEach(d=>setTimeout(()=>playRef.current("countdown"),d));
+      }
       timeLeftRef.current=t-1;
       setTimeLeft(t-1);
       if(curPh?.type!=="pre-start")setElapsed(e=>e+1);
@@ -1178,14 +1220,23 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
     intervalRef.current=setInterval(tick,1000);
     return()=>{
       clearInterval(intervalRef.current);
-      document.removeEventListener("visibilitychange",onVis);
+      document.removeEventListener("visibilitychange",recover);
+      document.removeEventListener("pointerdown",recover,true);
       try{if(keepAlive)keepAlive.stop();}catch{/* already stopped */}
+      stopSilenceLoop();
     };
   },[]);
   const handlePause=()=>{
     const next=!pausedRef.current;
     pausedRef.current=next;
     setPaused(next);
+  };
+  const handleQuit=()=>{
+    const hc=phases.current.slice(0,phaseIdxRef.current).filter(p=>p.type==="hang").length;
+    if(hc===0){onExit();return;} // nothing done — nothing to log
+    const dur=Math.round((Date.now()-startRef.current)/1000);
+    const setsDone=Math.max(1,phases.current[phaseIdxRef.current]?.set??1);
+    onComplete({duration:dur,sets:setsDone,reps:proto.reps,totalHangs:hc,partial:true,proto});
   };
   const phaseLabel=isPreStart?"GET READY":isHang?"HANG":cur?.type==="rest"?"REST":"SHORT REST";
   const phaseSub=isPreStart?`First hang in ${timeLeft}s`:countdownActive?"GET READY":isHang?"HANG":cur?.type==="rest"?"REST":"SHORT REST";
@@ -1218,27 +1269,35 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
         <div className="wm-item"><label>Protocol</label><span style={{fontSize:12,lineHeight:1.3}}>{proto.name}</span></div>
       </div>
       <div className="control-row" style={{zIndex:1}}>
-        <button className="ctrl-btn" onClick={onExit}>Quit</button>
+        <button className="ctrl-btn" onClick={handleQuit}>Quit</button>
         <button className="ctrl-btn primary" onClick={handlePause}>{paused?"Resume":"Pause"}</button>
       </div>
     </div>
   );
 }
 // ─── COMPLETE SCREEN + SESSION NOTES ────────────────────────────────────────
+const EDIT_BTN_STYLE={background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text)",width:22,height:22,lineHeight:1,fontSize:13,cursor:"pointer",padding:0,flexShrink:0};
+function EditStat({label,value,display,onMinus,onPlus}){
+  return(
+    <div className="complete-stat"><label>{label}</label>
+      <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+        <button onClick={onMinus} style={EDIT_BTN_STYLE}>−</button>{display??value}<button onClick={onPlus} style={EDIT_BTN_STYLE}>+</button>
+      </span>
+    </div>
+  );
+}
 function CompleteScreen({session,onDone,setSessions}){
   const[notes,setNotes]=useState("");
   const[saved,setSaved]=useState(false);
+  // Approval step: values are editable until approved, then locked into history
+  const[vals,setVals]=useState({sets:session.sets??0,totalHangs:session.totalHangs??0,duration:session.duration??0});
+  const adj=(key,d)=>setVals(v=>({...v,[key]:Math.max(0,v[key]+d)}));
+  const isPartial=!!session.partial;
 
-  const handleSaveNotes=()=>{
-    if(!notes.trim()){onDone();return;}
+  const handleApprove=()=>{
     if(setSessions){
-      setSessions(prev=>{
-        const updated=[...prev];
-        // Find the most recent matching session (just logged) and attach notes
-        const idx=updated.findIndex(s=>s.date===session.date&&s.protocol===session.protocol);
-        if(idx>=0)updated[idx]={...updated[idx],notes:notes.trim()};
-        return updated;
-      });
+      const final={...session,...vals,notes:notes.trim()||undefined,approved:true};
+      setSessions(prev=>[final,...prev]);
     }
     setSaved(true);
     setTimeout(onDone,800);
@@ -1246,14 +1305,15 @@ function CompleteScreen({session,onDone,setSessions}){
 
   return(
     <div className="complete-screen">
-      <div className="glow" style={{width:300,height:300,background:"#A8FF3E",top:"30%",left:"50%",transform:"translateX(-50%)",opacity:0.15}}/>
-      <div className="complete-icon">🏔</div>
-      <div className="complete-title" style={{color:"#A8FF3E"}}>CRUSHED IT</div>
+      <div className="glow" style={{width:300,height:300,background:isPartial?"#FFD600":"#A8FF3E",top:"30%",left:"50%",transform:"translateX(-50%)",opacity:0.15}}/>
+      <div className="complete-icon">{isPartial?"⏸":"🏔"}</div>
+      <div className="complete-title" style={{color:isPartial?"#FFD600":"#A8FF3E"}}>{isPartial?"ENDED EARLY":"CRUSHED IT"}</div>
       <div style={{color:"var(--muted)",fontSize:13}}>{session.protocol} · {session.grip} · {session.edge}{session.fromProgram?` · ${session.fromProgram}`:""}</div>
+      <div style={{fontFamily:"DM Mono,monospace",fontSize:10,letterSpacing:2,color:"var(--muted)",textTransform:"uppercase"}}>Review & adjust — locked once approved</div>
       <div className="complete-grid" style={{zIndex:1}}>
-        <div className="complete-stat"><label>Sets</label><span>{session.sets}</span></div>
-        <div className="complete-stat"><label>Total Hangs</label><span>{session.totalHangs}</span></div>
-        <div className="complete-stat"><label>Duration</label><span>{fmtTime(session.duration)}</span></div>
+        <EditStat label="Sets" value={vals.sets} onMinus={()=>adj("sets",-1)} onPlus={()=>adj("sets",1)}/>
+        <EditStat label="Total Hangs" value={vals.totalHangs} onMinus={()=>adj("totalHangs",-1)} onPlus={()=>adj("totalHangs",1)}/>
+        <EditStat label="Duration" display={fmtTime(vals.duration)} onMinus={()=>adj("duration",-15)} onPlus={()=>adj("duration",15)}/>
         <div className="complete-stat"><label>Added Weight</label><span>{session.addedWeight>0?"+":""}{session.addedWeight}kg</span></div>
       </div>
       <div style={{width:"100%",zIndex:1}}>
@@ -1268,11 +1328,16 @@ function CompleteScreen({session,onDone,setSessions}){
         />
       </div>
       {saved?(
-        <div style={{color:"#A8FF3E",fontFamily:"DM Mono,monospace",fontSize:12,letterSpacing:2}}>✓ Notes saved</div>
+        <div style={{color:"#A8FF3E",fontFamily:"DM Mono,monospace",fontSize:12,letterSpacing:2}}>✓ Session locked in</div>
       ):(
-        <button className="start-btn" style={{width:"100%",margin:0,zIndex:1}} onClick={handleSaveNotes}>
-          {notes.trim()?"💾 SAVE & FINISH":"FINISH"}
-        </button>
+        <div style={{width:"100%",zIndex:1,display:"flex",flexDirection:"column",gap:10}}>
+          <button className="start-btn" style={{width:"100%",margin:0}} onClick={handleApprove}>
+            ✓ APPROVE & SAVE
+          </button>
+          <button onClick={onDone} style={{background:"none",border:"none",color:"var(--muted)",fontFamily:"DM Mono,monospace",fontSize:11,letterSpacing:1.5,textTransform:"uppercase",cursor:"pointer",padding:6}}>
+            Discard — don't log this session
+          </button>
+        </div>
       )}
     </div>
   );
