@@ -21,7 +21,7 @@ const PROTOCOLS = [
   { id:"repeaters", name:"Repeaters",     subtitle:"7-3 Endurance",      description:"7s on / 3s off repeated. Classic strength-endurance builder.", color:"#00D4FF", sets:6, hangSeconds:7,  restBetweenHangs:3,  restBetweenSets:180, reps:6 },
   { id:"density",   name:"Density Hang",  subtitle:"Volume & endurance", description:"Continuous hanging for time. Builds lactic tolerance.",         color:"#A8FF3E", sets:4, hangSeconds:30, restBetweenHangs:0,  restBetweenSets:120, reps:1 },
   { id:"horst",     name:"7-53 Protocol", subtitle:"Eric Hörst method",  description:"7s hang, 53s rest per set. Maximizes strength adaptation.",     color:"#FFD600", sets:5, hangSeconds:7,  restBetweenHangs:53, restBetweenSets:180, reps:3 },
-  { id:"custom",    name:"Custom",        subtitle:"Your protocol",      description:"Build your own. Full control over every parameter.",            color:"#FF2D78", sets:4, hangSeconds:10, restBetweenHangs:5,  restBetweenSets:120, reps:3 },
+  { id:"custom",    name:"Custom",        subtitle:"Your protocol",      description:"Build your own. Full control over every parameter.",            color:"#FF2D78", sets:4, hangSeconds:7,  restBetweenHangs:7,  restBetweenSets:120, reps:7 },
 ];
 const GRIPS = ["Half Crimp","Full Crimp","Open Hand","3-Finger Drag","2-Finger Pocket","Pinch","Sloper","Monodoigt"];
 const EDGE_SIZES = ["8mm","10mm","12mm","14mm","18mm","20mm","25mm","30mm+"];
@@ -984,7 +984,7 @@ function FreeHangView({onBack,cueSelections,muted,setMuted,sessions,setSessions}
   const[selectedEdge,setSelectedEdge]=useLocalStorage("hb_edge","12mm");
   const[customEdges,setCustomEdges]=useLocalStorage("hb_custom_edges",[]);
   const[addedWeight,setAddedWeight]=useState(0);
-  const[customProto,setCustomProto]=useLocalStorage("hb_custom",{sets:4,hangSeconds:10,restBetweenHangs:5,restBetweenSets:120,reps:3});
+  const[customProto,setCustomProto]=useLocalStorage("hb_custom",{sets:4,hangSeconds:7,restBetweenHangs:7,restBetweenSets:120,reps:7});
   const[savedProtos,setSavedProtos]=useLocalStorage("hb_saved_protos",[]);
   const[setsOverride,setSetsOverride]=useState(null);
   const[repsOverride,setRepsOverride]=useState(null);
