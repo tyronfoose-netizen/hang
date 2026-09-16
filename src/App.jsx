@@ -103,13 +103,10 @@ function unlockAudio(){
 // ─── SOUND ENGINE ─────────────────────────────────────────────────────────────
 function useSoundEngine(cueSelections,muted){
   const ensureAC=useCallback(()=>{
-    if(window.__hangio_ac&&window.__hangio_ac.state!=="closed"){
-      if(window.__hangio_ac.state==="suspended")window.__hangio_ac.resume();
-      return window.__hangio_ac;
-    }
-    const ac=createAudioContext();
-    if(ac?.state==="suspended")ac.resume();
-    window.__hangio_ac=ac;
+    let ac=window.__hangio_ac;
+    if(!ac||ac.state==="closed"){ac=createAudioContext();window.__hangio_ac=ac;}
+    // iOS reports "interrupted" as well as "suspended" — resume on anything not running
+    if(ac&&ac.state!=="running")ac.resume().catch(()=>{});
     return ac;
   },[]);
   const play=useCallback((cue)=>{
@@ -956,8 +953,10 @@ function FreeHangView({onBack,cueSelections,muted,setMuted,sessions,setSessions}
   const[customEdges,setCustomEdges]=useLocalStorage("hb_custom_edges",[]);
   const[addedWeight,setAddedWeight]=useState(0);
   const[customProto,setCustomProto]=useLocalStorage("hb_custom",{sets:4,hangSeconds:10,restBetweenHangs:5,restBetweenSets:120,reps:3});
+  const[setsOverride,setSetsOverride]=useState(null);
   const[completedSession,setCompletedSession]=useState(null);
-  const proto=selectedProto===4?{...PROTOCOLS[4],...customProto}:PROTOCOLS[selectedProto];
+  const baseProto=selectedProto===4?{...PROTOCOLS[4],...customProto}:PROTOCOLS[selectedProto];
+  const proto=selectedProto!==4&&setsOverride!=null?{...baseProto,sets:setsOverride}:baseProto;
 
   const handleSessionComplete=session=>{
     const s={...session,protocol:proto.name,grip:GRIPS[selectedGrip],edge:selectedEdge,addedWeight,date:new Date().toISOString()};
@@ -973,7 +972,7 @@ function FreeHangView({onBack,cueSelections,muted,setMuted,sessions,setSessions}
           <div className="page-title">FREE<br/>HANG</div>
           <div className="page-sub">Single session — no program needed</div>
         </div>
-        {tab==="train"&&<TrainTab selectedProto={selectedProto} setSelectedProto={setSelectedProto} selectedGrip={selectedGrip} setSelectedGrip={setSelectedGrip} selectedEdge={selectedEdge} setSelectedEdge={setSelectedEdge} customEdges={customEdges} setCustomEdges={setCustomEdges} addedWeight={addedWeight} setAddedWeight={setAddedWeight} customProto={customProto} setCustomProto={setCustomProto} proto={proto} onStart={()=>{unlockAudio();setWorkoutState("running");}}/>}
+        {tab==="train"&&<TrainTab selectedProto={selectedProto} setSelectedProto={i=>{setSelectedProto(i);setSetsOverride(null);}} onAdjustSets={d=>setSetsOverride(v=>Math.max(1,Math.min(12,(v??PROTOCOLS[selectedProto].sets)+d)))} selectedGrip={selectedGrip} setSelectedGrip={setSelectedGrip} selectedEdge={selectedEdge} setSelectedEdge={setSelectedEdge} customEdges={customEdges} setCustomEdges={setCustomEdges} addedWeight={addedWeight} setAddedWeight={setAddedWeight} customProto={customProto} setCustomProto={setCustomProto} proto={proto} onStart={()=>{unlockAudio();setWorkoutState("running");}}/>}
         {tab==="history"&&<HistoryTab sessions={sessions} onClear={()=>setSessions([])}/>}
         {tab==="progress"&&<ProgressTab sessions={sessions}/>}
       </div>
@@ -987,7 +986,13 @@ function FreeHangView({onBack,cueSelections,muted,setMuted,sessions,setSessions}
 }
 
 // ─── TRAIN TAB ───────────────────────────────────────────────────────────────
-function TrainTab({selectedProto,setSelectedProto,selectedGrip,setSelectedGrip,selectedEdge,setSelectedEdge,customEdges,setCustomEdges,addedWeight,setAddedWeight,customProto,setCustomProto,proto,onStart}){
+// Graduated seconds ladder: 3–20s by 1s, 20–60s by 10s, 60–300s by 30s
+function stepSeconds(v,d){
+  return d>0
+    ?(v<20?v+1:v<60?Math.min(60,v+10):v+30)
+    :(v>60?Math.max(60,v-30):v>20?Math.max(20,v-10):v-1);
+}
+function TrainTab({selectedProto,setSelectedProto,onAdjustSets,selectedGrip,setSelectedGrip,selectedEdge,setSelectedEdge,customEdges,setCustomEdges,addedWeight,setAddedWeight,customProto,setCustomProto,proto,onStart}){
   const[showCustom,setShowCustom]=useState(false);
   const[customInput,setCustomInput]=useState("");
   const[customErr,setCustomErr]=useState("");
@@ -1017,13 +1022,13 @@ function TrainTab({selectedProto,setSelectedProto,selectedGrip,setSelectedGrip,s
       {selectedProto===4&&(
         <><p className="section-title" style={{marginTop:4}}>Custom Settings</p>
         <div className="card">
-          {[{label:"Sets",key:"sets",min:1,max:12},{label:"Hang (s)",key:"hangSeconds",min:3,max:60},{label:"Rest/hang (s)",key:"restBetweenHangs",min:0,max:60},{label:"Reps/set",key:"reps",min:1,max:12},{label:"Rest/set (s)",key:"restBetweenSets",min:30,max:300}].map(({label,key,min,max})=>(
+          {[{label:"Sets",key:"sets",min:1,max:12,ladder:false},{label:"Hang Time (s)",key:"hangSeconds",min:3,max:20,ladder:false},{label:"Rest Time (s)",key:"restBetweenHangs",min:3,max:300,ladder:true},{label:"Reps/set",key:"reps",min:1,max:12,ladder:false},{label:"Rest/set (s)",key:"restBetweenSets",min:30,max:300,ladder:true}].map(({label,key,min,max,ladder})=>(
             <div key={key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <span style={{fontSize:14,color:"var(--muted)"}}>{label}</span>
               <div className="stepper">
-                <button className="step-btn" onClick={()=>setCustomProto(p=>({...p,[key]:Math.max(min,p[key]-(key.includes("Seconds")||key.includes("rest")?5:1))}))}>−</button>
+                <button className="step-btn" onClick={()=>setCustomProto(p=>({...p,[key]:Math.max(min,Math.min(max,ladder?stepSeconds(p[key],-1):p[key]-1))}))}>−</button>
                 <span style={{fontFamily:"DM Mono,monospace",fontSize:18,fontWeight:600,minWidth:48,textAlign:"center"}}>{customProto[key]}</span>
-                <button className="step-btn" onClick={()=>setCustomProto(p=>({...p,[key]:Math.min(max,p[key]+(key.includes("Seconds")||key.includes("rest")?5:1))}))}>+</button>
+                <button className="step-btn" onClick={()=>setCustomProto(p=>({...p,[key]:Math.max(min,Math.min(max,ladder?stepSeconds(p[key],1):p[key]+1))}))}>+</button>
               </div>
             </div>
           ))}
@@ -1064,7 +1069,13 @@ function TrainTab({selectedProto,setSelectedProto,selectedGrip,setSelectedGrip,s
       </div>
       <p className="section-title" style={{marginTop:8}}>Session Preview</p>
       <div className="setup-row">
-        <div className="setup-chip">Sets<strong>{proto.sets}</strong></div>
+        <div className="setup-chip">Sets
+          <span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+            <button onClick={()=>selectedProto===4?setCustomProto(p=>({...p,sets:Math.max(1,p.sets-1)})):onAdjustSets(-1)} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text)",width:22,height:22,lineHeight:1,fontSize:14,cursor:"pointer",padding:0}}>−</button>
+            <strong>{proto.sets}</strong>
+            <button onClick={()=>selectedProto===4?setCustomProto(p=>({...p,sets:Math.min(12,p.sets+1)})):onAdjustSets(1)} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text)",width:22,height:22,lineHeight:1,fontSize:14,cursor:"pointer",padding:0}}>+</button>
+          </span>
+        </div>
         <div className="setup-chip">Reps<strong>{proto.reps}×{proto.hangSeconds}s</strong></div>
         <div className="setup-chip">Total<strong>{fmtTime(totalTime)}</strong></div>
       </div>
@@ -1113,7 +1124,25 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
   const hangsCompleted=phases.current.slice(0,phaseIdx).filter(p=>p.type==="hang").length;
   const totalHangs=phases.current.filter(p=>p.type==="hang").length;
   useEffect(()=>{
+    // Keep the AudioContext alive for the entire session. iOS/Safari suspends an idle
+    // context between cues, which killed all audio after the first hang/rest cycle.
+    // A continuous inaudible oscillator prevents suspension; visibilitychange + per-tick
+    // resume() recover it if the OS suspends it anyway.
+    let keepAlive=null;
+    try{
+      const kac=window.__hangio_ac;
+      if(kac&&kac.state!=="closed"){
+        keepAlive=kac.createOscillator();
+        const kg=kac.createGain();
+        kg.gain.value=0.0001;keepAlive.frequency.value=30;
+        keepAlive.connect(kg);kg.connect(kac.destination);keepAlive.start();
+      }
+    }catch{/* audio unavailable — non-fatal */}
+    const onVis=()=>{const a=window.__hangio_ac;if(a&&a.state!=="running")a.resume().catch(()=>{});};
+    document.addEventListener("visibilitychange",onVis);
     const tick=()=>{
+      const a=window.__hangio_ac;
+      if(a&&a.state!=="running")a.resume().catch(()=>{});
       if(pausedRef.current)return;
       const idx=phaseIdxRef.current;
       const t=timeLeftRef.current;
@@ -1147,7 +1176,11 @@ function WorkoutScreen({proto,grip,edge,addedWeight,cueSelections,muted,setMuted
       if(curPh?.type!=="pre-start")setElapsed(e=>e+1);
     };
     intervalRef.current=setInterval(tick,1000);
-    return()=>clearInterval(intervalRef.current);
+    return()=>{
+      clearInterval(intervalRef.current);
+      document.removeEventListener("visibilitychange",onVis);
+      try{if(keepAlive)keepAlive.stop();}catch{/* already stopped */}
+    };
   },[]);
   const handlePause=()=>{
     const next=!pausedRef.current;
